@@ -1,12 +1,11 @@
 """
-duckyPad HID example: Set RTC
+duckyPad HID example: HID read AND write
 
 https://github.com/dekuNukem/duckyPad-profile-autoswitcher/blob/master/HID_details.md
 """
 
 import hid
 import time
-from datetime import datetime, timezone
 
 PC_TO_DUCKYPAD_HID_BUF_SIZE = 64
 DUCKYPAD_TO_PC_HID_BUF_SIZE = 64
@@ -51,41 +50,14 @@ def duckypad_hid_write(hid_buf_64b):
 	h.close()
 	return result
 
-def get_timestamp_and_utc_offset():
-    now = datetime.now().astimezone()
-    unix_timestamp = int(now.timestamp())
-    utc_offset_minutes = int(now.utcoffset().total_seconds() // 60)
-    return unix_timestamp, utc_offset_minutes
-
-unix_ts, utc_offset_minutes = get_timestamp_and_utc_offset()
-
-unix_ts_u8_list = list(unix_ts.to_bytes(4, 'little', signed=False))
-utc_offset_u8_list = list(utc_offset_minutes.to_bytes(2, 'little', signed=True))
-
-print(f"\n\n--------\nUNIX Timestamp: {unix_ts}\nUTC Offset (Minutes): {utc_offset_minutes}\n-----------\n")
-
 pc_to_duckypad_buf = [0] * PC_TO_DUCKYPAD_HID_BUF_SIZE
+pc_to_duckypad_buf[0] = 5	# HID Usage ID, always 5
+pc_to_duckypad_buf[1] = 0	# Reserved
+pc_to_duckypad_buf[2] = 0x18	# Command type: Dump PGV
+pc_to_duckypad_buf[3] = 0    # PGV index
 
-pc_to_duckypad_buf[0] = 5   # HID Usage ID, always 5
-pc_to_duckypad_buf[1] = 0   # Reserved
-pc_to_duckypad_buf[2] = 0x1A    # Command: Set RTC
-
-pc_to_duckypad_buf[3] = unix_ts_u8_list[0]
-pc_to_duckypad_buf[4] = unix_ts_u8_list[1]
-pc_to_duckypad_buf[5] = unix_ts_u8_list[2]
-pc_to_duckypad_buf[6] = unix_ts_u8_list[3]
-
-pc_to_duckypad_buf[7] = utc_offset_u8_list[0]
-pc_to_duckypad_buf[8] = utc_offset_u8_list[1]
-
-print("Sending to duckyPad:\n", pc_to_duckypad_buf)
+print("\n\nSending to duckyPad:\n", pc_to_duckypad_buf)
 duckypad_to_pc_buf = duckypad_hid_write(pc_to_duckypad_buf)
 print("\nduckyPad response:\n", duckypad_to_pc_buf)
-
-response = duckypad_to_pc_buf[2]
-if response == 0:
-    print("\nSuccess! A clock icon should appear on top-left corner")
-elif response == 2:
-    print("\nduckyPad is BUSY, make sure no script is running, and not in menu.")
-else:
-    print("\nduckyPad reported ERROR, is firmware up to date?")
+hex_list = [f"{n:02x}" for n in duckypad_to_pc_buf]
+print("\nduckyPad response hex:\n", hex_list)
