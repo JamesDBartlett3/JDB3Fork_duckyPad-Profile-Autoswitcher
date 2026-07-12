@@ -1,7 +1,10 @@
-import time
 import platform
+import os
 
 this_os = platform.system()
+
+# --- Platform Specific Imports and Setup ---
+IS_WAYLAND = False
 
 if this_os == 'Windows':
     import ctypes
@@ -9,14 +12,29 @@ if this_os == 'Windows':
     import ctwin32.ntdll
     import ctwin32.user
     import pygetwindow as gw
+
 elif this_os == 'Darwin':
     from AppKit import NSWorkspace
     import Quartz
+
 elif this_os == 'Linux':
-    from ewmh import EWMH
-    import psutil
-    import Xlib
-    NET_WM_NAME = Xlib.display.Display().intern_atom('_NET_WM_NAME')
+    # Check for Wayland environment variable
+    if os.environ.get('WAYLAND_DISPLAY'):
+        IS_WAYLAND = True
+    else:
+        try:
+            from ewmh import EWMH
+            import psutil
+            import Xlib
+            # Attempt to connect to X server to ensure we aren't in a broken state
+            # and to get the atom for window names.
+            _display = Xlib.display.Display()
+            NET_WM_NAME = _display.intern_atom('_NET_WM_NAME')
+        except (ImportError, Exception):
+            # Fallback if imports fail or X server is unreachable
+            IS_WAYLAND = True
+
+# --- Main Interface Functions ---
 
 def get_active_window():
     if this_os == 'Windows':
@@ -25,7 +43,7 @@ def get_active_window():
         return darwin_get_active_window()
     elif this_os == 'Linux':
         return linux_get_active_window()
-    raise f'Platform {this_os} not supported'
+    raise NotImplementedError(f'Platform {this_os} not supported')
 
 def get_list_of_all_windows():
     if this_os == 'Windows':
@@ -34,9 +52,14 @@ def get_list_of_all_windows():
         return darwin_get_list_of_all_windows()
     elif this_os == 'Linux':
         return linux_get_list_of_all_windows()
-    raise f'Platform {this_os} not supported'
+    raise NotImplementedError(f'Platform {this_os} not supported')
+
+# --- Linux Implementation ---
 
 def linux_get_list_of_all_windows():
+    if IS_WAYLAND:
+        return {('Wayland', 'Wayland is not supported yet')}
+
     ret = set()
     ewmh = EWMH()
     for window in ewmh.getClientList():
@@ -44,52 +67,77 @@ def linux_get_list_of_all_windows():
             win_pid = ewmh.getWmPid(window)
         except TypeError:
             win_pid = False
+        
         if win_pid:
-            app = psutil.Process(win_pid).name()
+            try:
+                app = psutil.Process(win_pid).name()
+            except psutil.NoSuchProcess:
+                app = 'Unknown'
         else:
             app = 'Unknown'
+
         wm_name = window.get_wm_name()
         if not wm_name:
             wm_name = window.get_full_property(NET_WM_NAME, 0).value
         if not wm_name:
-            wm_name = f'class:{window.get_wm_class()[0]}'
+            try:
+                wm_class = window.get_wm_class()
+                wm_name = f'class:{wm_class[0]}' if wm_class else 'unknown'
+            except TypeError:
+                wm_name = 'unknown'
+
         if isinstance(wm_name, bytes):
             wm_name = wm_name.decode('utf-8')
         ret.add((app, wm_name))
     return ret
 
 def linux_get_active_window():
-    ret = set()
+    if IS_WAYLAND:
+        return 'Wayland', 'Wayland is not supported yet'
+
     ewmh = EWMH()
     active_window = ewmh.getActiveWindow()
     if not active_window:
         return '', ''
+    
     try:
         win_pid = ewmh.getWmPid(active_window)
-    except TypeError:
+    except (TypeError, Xlib.error.XResourceError):
         win_pid = False
-    except Xlib.error.XResourceError:
-        return '', ''
+    
     wm_name = active_window.get_wm_name()
     if not wm_name:
         wm_name = active_window.get_full_property(NET_WM_NAME, 0).value
     if not wm_name:
-        wm_name = f'class:{active_window.get_wm_class()[0]}'
+        try:
+            wm_class = active_window.get_wm_class()
+            wm_name = f'class:{wm_class[0]}' if wm_class else 'unknown'
+        except TypeError:
+            wm_name = 'unknown'
+            
     if isinstance(wm_name, bytes):
         wm_name = wm_name.decode('utf-8')
+        
     if win_pid:
-        active_app = psutil.Process(win_pid).name()
+        try:
+            active_app = psutil.Process(win_pid).name()
+        except psutil.NoSuchProcess:
+            active_app = 'Unknown'
     else:
         return '', wm_name
+        
     return (active_app, wm_name)
+
+# --- macOS (Darwin) Implementation ---
 
 def darwin_get_active_window():
     windows = Quartz.CGWindowListCopyWindowInfo(
         Quartz.kCGWindowListExcludeDesktopElements | Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID)
     for window in windows:
         if window[Quartz.kCGWindowLayer] == 0:
-            return window[Quartz.kCGWindowOwnerName], window.get(Quartz.kCGWindowName, 'unknown')
+            return window[Quartz.kCGWindowOwnerName], window.get(Quartz.kCGWindowName, 'Unknown')
     return '', ''
+
 
 def darwin_get_list_of_all_windows():
     apps = []
@@ -98,10 +146,12 @@ def darwin_get_list_of_all_windows():
 
     for window in windows:
         apps.append((window[Quartz.kCGWindowOwnerName],
-                    window.get(Quartz.kCGWindowName, 'unknown')))
+                    window.get(Quartz.kCGWindowName, 'Unknown')))
     apps = list(set(apps))
     apps = sorted(apps, key=lambda x: x[0])
     return apps
+
+# --- Windows Implementation ---
 
 def win_get_app_name(hwnd):
     """Get application name given hwnd."""
@@ -138,24 +188,16 @@ def win_get_active_window():
 if __name__ == "__main__":
     """
     get_list_of_all_windows() should return a list of all windows
-
     A list of str tuples: (app_name, window_title)
-
-    Sample:
-    [('explorer', 'src'),
-    ('mintty', 'MINGW64:/c/Users/dekuNukem/Desktop/'),
-    ('powershell', 'Windows PowerShell')]
     """
     print("\n----- All Windows -----\n")
-    for item in get_list_of_all_windows():
+    all_windows = get_list_of_all_windows()
+    for item in all_windows:
         print(item)
 
     """
     get_active_window() should return the window that's currently in focus
-
     tuple of str: (app_name, window_title)
-    
-    e.g.: ('explorer', 'src')
     """
     print("\n----- Current Window -----\n")
     print(get_active_window())

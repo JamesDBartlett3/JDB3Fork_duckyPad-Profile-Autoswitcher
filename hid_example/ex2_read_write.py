@@ -54,9 +54,9 @@ pc_to_duckypad_buf = [0] * PC_TO_DUCKYPAD_HID_BUF_SIZE
 pc_to_duckypad_buf[0] = 5	# HID Usage ID, always 5
 pc_to_duckypad_buf[1] = 0	# Reserved
 pc_to_duckypad_buf[2] = 0	# Command type
+
 print("\n\nSending to duckyPad:\n", pc_to_duckypad_buf)
 duckypad_to_pc_buf = duckypad_hid_write(pc_to_duckypad_buf)
 print("\nduckyPad response:\n", duckypad_to_pc_buf)
-
-
-
+hex_list = [f"{n:02x}" for n in duckypad_to_pc_buf]
+print("\nduckyPad response hex:\n", hex_list)

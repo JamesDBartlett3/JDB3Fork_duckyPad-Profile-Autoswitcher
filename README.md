@@ -8,7 +8,7 @@ This app allows your duckyPad to **switch profiles automatically** based on **cu
 
 ## User Manual
 
-### Windows
+### Download App: Windows
 
 - 👉 [Download the latest release](https://github.com/dekuNukem/duckyPad-profile-autoswitcher/releases/latest)
 
@@ -22,12 +22,11 @@ Feel free to [review the files](./src), or run the source code directly with Pyt
 
 ![Alt text](resources/defender.png)
 
-### macOS / Linux
+### Download App: macOS / Linux
 
 * 👉 [See instructions here](https://dekunukem.github.io/duckyPad-Pro/doc/linux_macos_notes.html)
 
 - **[LINUX ONLY]** Window detection not working? You might need to implement your own `get_list_of_all_windows()` and `get_active_window()` in `get_window.py`.
-
 ### Using the App
 
 Your duckyPad should show up in the `Connection` section.
