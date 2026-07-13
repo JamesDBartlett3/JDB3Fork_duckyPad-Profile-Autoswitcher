@@ -30,23 +30,18 @@ This article describes duckyPad HID command protocols, and how it can be used to
 duckyPad enumerates as 4 HID devices:
 
 * Keyboard
-
 * Mouse
-
 * Keypad with Media Keys
-
 * Counted Buffer 
-
 	* Used for two-way communication between DP and PC
 
 ------
 
 **Vendor ID**: 0x0483 (1155)
 
-**Product ID**
+**Product ID**:
 
 * **duckyPad (2020)**: 0xd11c (53532) 
-
 * **duckyPad Pro (2024)**: 0xd11d (53533) 
 
 The `Counted Buffer` device has the usage ID of 0x3a (58).
@@ -81,7 +76,7 @@ duckyPad will reply with a **fixed 64-byte** response:
 
 ### Endianness
 
-All multi-byte values are **Big-Endian**.
+All multi-byte values are **Little-Endian**.
 
 ## HID Examples
 
@@ -342,6 +337,9 @@ Wake up from sleep
 
 ### Dump Persistent Global Variables (0x18)
 
+* PGV index `i`: **0 to 31**
+* Returns `i`-th to `i+14`-th PGV
+
 💬 PC to duckyPad:
 
 |   Byte#  |   Description   |
@@ -349,7 +347,8 @@ Wake up from sleep
 |     0    |        0x05        |
 |     1    | Reserved |
 |     2    |        0x18        |
-| 3 ... 63 | 0 |
+|     3    |PGV index|
+| 4 ... 63 | 0 |
 
 💬 duckyPad to PC:
 
@@ -358,16 +357,16 @@ Wake up from sleep
 |     0    |    0x04    |
 |     1    |          Reserved         |
 |     2    | Status, 0 = SUCCESS |
-| 3-4 | GV0 |
-| 5-6 | GV1 |
-|....|....|
-| 61-62 | GV29 |
-
+| 3-6 | PGV Value i |
+| 7-10 | PGV Value i+1|
+|...|...|
+| 59-62 | PGV Value i+14|
 
 ### Write Persistent Global Variables (0x19)
 
 * You can write to multiple GVs at once
-* To select a GV to write, add 127 to its index. (aka setting its top bit to 1)
+* To select a GV to write, add 128 to its index.
+    * (AKA setting its top bit to 1)
 * Leave rest of the payload to 0
 
 💬 PC to duckyPad:
@@ -377,11 +376,10 @@ Wake up from sleep
 |     0    |        0x05        |
 |     1    | Reserved |
 |     2    |        0x19        |
-| 3 | GV index + 127 |
-| 4 | Upper Byte |
-| 5 | Lower Byte |
-|6-8| Next GV (if needed)|
-|9-11| Next GV (if needed)|
+| 3 | PGV index + 128 |
+| 4-7 | PGV Value |
+|8-12| Next GV (if needed)|
+|13-17| Next GV (if needed)|
 |....|....|
 
 💬 duckyPad to PC:
@@ -404,7 +402,7 @@ Wake up from sleep
 |     1    | Reserved |
 |     2    |        0x1A        |
 | 3-6 | UNIX Timestamp|
-| 7-8 | UTC Offset<br>(Minutes) |
+| 7-8 | UTC Offset<br>**(Minutes)** |
 |9 ... 63|0|
 
 💬 duckyPad to PC:

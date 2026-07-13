@@ -2,6 +2,7 @@ hidapi
 platformdirs
 pystray
 pillow
+certifi
 
 # Windows-specific
 ctwin32 ; sys_platform == 'win32'

@@ -45,21 +45,29 @@ def make_dp_info_dict(hid_msg, hid_path):
     this_dict['hid_msg'] = hid_msg
     return this_dict
 
+DP_SCAN_BUSY = "busy"
+
 def get_all_dp_info(dp_path_list):
     dp_info_list = []
+    any_busy = False
     pc_to_duckypad_buf = get_empty_pc_to_duckypad_buf()
     for this_path in dp_path_list:
         # print(this_path)
-        myh = hid.device()
-        myh.open_path(this_path)
-        myh.write(pc_to_duckypad_buf)
-        result = myh.read(DUCKYPAD_TO_PC_HID_BUF_SIZE)
-        myh.close()
+        thish = hid.device()
+        thish.open_path(this_path)
+        thish.write(pc_to_duckypad_buf)
+        result = thish.read(DUCKYPAD_TO_PC_HID_BUF_SIZE)
+        thish.close()
         # print(result)
+        if result[2] == HID_RESPONSE_BUSY:
+            any_busy = True
+            continue
         if result[2] != HID_RESPONSE_OK:
             continue
         this_dict = make_dp_info_dict(result, this_path)
         dp_info_list.append(this_dict)
+    if any_busy:
+        return DP_SCAN_BUSY
     return dp_info_list
 
 def scan_duckypads():
@@ -98,24 +106,11 @@ def get_timestamp_and_utc_offset():
     utc_offset_minutes = int(now.utcoffset().total_seconds() // 60)
     return unix_timestamp, utc_offset_minutes
 
-def u32_to_u8_list_be(value):
-    return [
-        (value >> 24) & 0xFF,
-        (value >> 16) & 0xFF,
-        (value >> 8) & 0xFF,
-        value & 0xFF]
-
-def i16_to_u8_list_be(value):
-    value &= 0xFFFF
-    return [
-        (value >> 8) & 0xFF,
-        value & 0xFF ]
-
 def duckypad_sync_rtc(hid_obj):
     pc_to_duckypad_buf = get_empty_pc_to_duckypad_buf()
     unix_ts, utc_offset_minutes = get_timestamp_and_utc_offset()
-    unix_ts_u8_list = u32_to_u8_list_be(unix_ts)
-    utc_offset_u8_list = i16_to_u8_list_be(utc_offset_minutes)
+    unix_ts_u8_list = list(unix_ts.to_bytes(4, 'little', signed=False))
+    utc_offset_u8_list = list(utc_offset_minutes.to_bytes(2, 'little', signed=True))
     pc_to_duckypad_buf[2] = 0x1A    # Command: Set RTC
     pc_to_duckypad_buf[3] = unix_ts_u8_list[0]
     pc_to_duckypad_buf[4] = unix_ts_u8_list[1]

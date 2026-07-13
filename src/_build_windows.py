@@ -45,7 +45,9 @@ PyInstaller.__main__.run([
     'duckypad_autoprofile.py',
     '--icon=_icon.ico',
     '--noconsole',
-    '--add-data=_icon.ico;.'
+    '--add-data=_icon.ico;.',
+    '--collect-all',
+    'certifi'
 ])
 
 output_folder_path = os.path.join('.', "dist")
@@ -60,6 +62,8 @@ PyInstaller.__main__.run([
     '--icon=_icon.ico',
     '--console',
     '--add-data=_icon.ico;.',
+    '--collect-all',
+    'certifi',
     '--name=duckypad_autoprofile_debug'
 ])
 
