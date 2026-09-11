@@ -12,7 +12,9 @@ pygetwindow ; sys_platform == 'win32'
 pyinstaller ; sys_platform == 'win32'
 
 # macOS-specific
-pyobjc ; sys_platform == 'darwin'  # Needed for AppKit and Quartz
+# Pinned: pyobjc 12.x requires macOS 15.7+ and abort()s on older 15.x (e.g. 15.6).
+# 10.3 is the newest release that supports a broad range of macOS versions.
+pyobjc==10.3 ; sys_platform == 'darwin'  # Needed for AppKit and Quartz
 
 # Linux-specific
 ewmh ; sys_platform == 'linux'
