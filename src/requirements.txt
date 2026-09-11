@@ -1,4 +1,6 @@
 hidapi
+# NOTE: must be `hidapi`, NOT `hid` — the `hid` package imports as `hid` too but needs a
+# system hidapi library (fails on macOS with ImportError about libhidapi*.dylib).
 platformdirs
 pystray
 pillow

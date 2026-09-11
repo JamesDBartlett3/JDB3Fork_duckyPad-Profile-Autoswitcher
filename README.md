@@ -26,6 +26,17 @@ Feel free to [review the files](./src), or run the source code directly with Pyt
 
 * 👉 [See instructions here](https://dekunukem.github.io/duckyPad-Pro/doc/linux_macos_notes.html)
 
+#### Run from Source: macOS HID Setup
+
+The app needs the pip **`hidapi`** package, which bundles the native hidapi library. Do **not** install the similarly-named **`hid`** package — it imports as `hid` too, but requires a system-installed hidapi library (`brew install hidapi`) and fails with `ImportError: Unable to load any of the following libraries: libhidapi.dylib ...` otherwise.
+
+```bash
+brew install python-tk
+pip3 uninstall -y hid          # if present; it shadows hidapi
+pip3 install -r src/requirements.txt
+python3 src/duckypad_autoprofile.py
+```
+
 - **[LINUX ONLY]** Window detection not working? You might need to implement your own `get_list_of_all_windows()` and `get_active_window()` in `get_window.py`.
 ### Using the App
 
