@@ -30,12 +30,20 @@ Feel free to [review the files](./src), or run the source code directly with Pyt
 
 The app needs the pip **`hidapi`** package, which bundles the native hidapi library. Do **not** install the similarly-named **`hid`** package — it imports as `hid` too, but requires a system-installed hidapi library (`brew install hidapi`) and fails with `ImportError: Unable to load any of the following libraries: libhidapi.dylib ...` otherwise.
 
+Homebrew's Python is externally managed (PEP 668) and refuses system-wide `pip install`, so run from source inside a virtual environment. Homebrew also splits tkinter out of Python — the app is a Tk GUI, so `python-tk` is required:
+
 ```bash
-brew install python-tk
-pip3 uninstall -y hid          # if present; it shadows hidapi
-pip3 install -r src/requirements.txt
-python3 src/duckypad_autoprofile.py
+brew install python-tk@3.12                # tkinter is not bundled with Homebrew Python
+cd src
+$(brew --prefix)/bin/python3 -m venv .venv # use the Homebrew Python, not /usr/bin/python3
+source .venv/bin/activate
+pip install -r requirements.txt
+python duckypad_autoprofile.py             # prefix with sudo if HID access is denied
 ```
+
+If the app reports "duckyPad detected, but I need additional permissions", follow the [official macOS notes](https://dekunukem.github.io/duckyPad-Pro/doc/linux_macos_notes.html).
+
+> **Virtual-machine note (Docker-OSX / Quickemu):** USB passthrough is fine for install, launch, and device enumeration, but HID command traffic (e.g. profile switch) can make the pad restart its USB session — and QEMU's `usb-host` does not follow the re-enumeration, so the device is lost until the VM restarts. Validate HID command behavior on real macOS hardware, not in a VM.
 
 - **[LINUX ONLY]** Window detection not working? You might need to implement your own `get_list_of_all_windows()` and `get_active_window()` in `get_window.py`.
 ### Using the App
