@@ -120,11 +120,15 @@ class RemoteSender:
         self._stop.set()
         self._wakeup.set()
 
-    def set_profile(self, profile):
-        """Cheap and non-blocking, safe to call from the UI thread. Sends immediately when changed."""
+    def set_profile(self, profile, focus_changed=False):
+        """
+        Cheap and non-blocking, safe to call from the UI thread.
+        Sends immediately when the profile changed or the focused window changed,
+        otherwise the profile is only repeated as a periodic heartbeat.
+        """
         profile = str(profile or '')
         with self._lock:
-            if profile == self._profile:
+            if profile == self._profile and not focus_changed:
                 return
             self._profile = profile
         self._wakeup.set()

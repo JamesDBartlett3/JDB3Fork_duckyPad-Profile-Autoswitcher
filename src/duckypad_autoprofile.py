@@ -14,6 +14,7 @@ import threading
 from hid_common import *
 import get_window
 import check_update
+import remote_link
 from platformdirs import *
 import subprocess
 import argparse
@@ -538,6 +539,14 @@ discord_button.place(x=scaled_size(110), y=scaled_size(5), width=scaled_size(90)
 discord_button = Button(dashboard_lf, text="Backup", command=open_save_folder)
 discord_button.place(x=scaled_size(210), y=scaled_size(5), width=scaled_size(90))
 
+remote_button = Button(dashboard_lf, text="Remote...", command=lambda: create_remote_window())
+remote_button.place(x=scaled_size(310), y=scaled_size(5), width=scaled_size(90))
+
+remote_status_var = StringVar()
+remote_status_var.set("Remote (RDP/VNC): off")
+remote_status_label = Label(master=dashboard_lf, textvariable=remote_status_var)
+remote_status_label.place(x=scaled_size(10), y=scaled_size(65))
+
 autoswitch_status_var = StringVar()
 autoswitch_status_label = Label(master=dashboard_lf, textvariable=autoswitch_status_var, font='TkFixedFont', cursor="hand2")
 autoswitch_status_label.place(x=scaled_size(10), y=scaled_size(40))
@@ -645,7 +654,73 @@ def switch_queue_add(profile_target_name):
 
 WINDOW_CHECK_FREQUENCY_MS = 100
 
+remote_sender = None
+remote_receiver = None
+remote_status_base = "Remote (RDP/VNC): off"
+
+def remote_mode():
+    return config_dict.get('remote_mode', remote_link.REMOTE_MODE_OFF)
+
+def remote_stop():
+    global remote_sender, remote_receiver
+    if remote_sender is not None:
+        remote_sender.stop()
+        remote_sender = None
+    if remote_receiver is not None:
+        remote_receiver.stop()
+        remote_receiver = None
+
+def remote_apply_config():
+    """(Re)starts the remote sender/receiver according to config. Returns an error message, or None on success."""
+    global remote_sender, remote_receiver, remote_status_base
+    remote_stop()
+    mode = remote_mode()
+    secret = config_dict.get('remote_secret', '')
+    try:
+        if mode == remote_link.REMOTE_MODE_SENDER:
+            port = remote_link.parse_port(config_dict.get('remote_port', remote_link.DEFAULT_PORT))
+            host = str(config_dict.get('remote_host', '')).strip()
+            if len(host) == 0:
+                raise ValueError("Destination address is empty")
+            remote_sender = remote_link.RemoteSender(host, port, secret)
+            remote_sender.start()
+            remote_status_base = f"Remote (RDP/VNC): SENDING profile to {host}:{port}"
+        elif mode == remote_link.REMOTE_MODE_RECEIVER:
+            port = remote_link.parse_port(config_dict.get('remote_port', remote_link.DEFAULT_PORT))
+            address = str(config_dict.get('remote_listen_address', remote_link.DEFAULT_LISTEN_ADDRESS)).strip()
+            remote_receiver = remote_link.RemoteReceiver(address, port, config_dict.get('remote_allowlist', ''), secret)
+            remote_receiver.start()
+            remote_status_base = f"Remote (RDP/VNC): LISTENING on {address}:{port}"
+        else:
+            remote_status_base = "Remote (RDP/VNC): off"
+    except Exception as e:
+        remote_stop()
+        remote_status_base = "Remote (RDP/VNC): ERROR, see Remote... settings"
+        print("remote_apply_config:", e)
+        remote_status_var.set(remote_status_base)
+        return str(e)
+    remote_status_var.set(remote_status_base)
+    return None
+
+def get_remote_profile_to_apply(app_name, window_title):
+    """Profile requested by the remote instance, only while the RDP/VNC viewer is the active local window."""
+    if remote_receiver is None:
+        return None
+    if not remote_link.viewer_matches(app_name, window_title, config_dict.get('remote_viewer_app', ''), config_dict.get('remote_viewer_title', '')):
+        return None
+    return remote_receiver.get_profile()
+
+def update_remote_status(applied_remote_profile):
+    new_status = remote_status_base
+    if applied_remote_profile is not None:
+        new_status += f"  [applying remote profile: {applied_remote_profile}]"
+    if remote_status_var.get() != new_status:
+        remote_status_var.set(new_status)
+
+last_remote_window = None
+
 def update_current_app_and_title():
+    global last_remote_window
 
     root.after(WINDOW_CHECK_FREQUENCY_MS, update_current_app_and_title)
 
@@ -655,23 +730,37 @@ def update_current_app_and_title():
 
     if rule_window is not None and rule_window.winfo_exists():
         return
+    focus_changed = (app_name, window_title) != last_remote_window
+    last_remote_window = (app_name, window_title)
     if config_dict['autoswitch_enabled'] is False:
+        if remote_sender is not None:
+            remote_sender.set_profile('', focus_changed)
         return
 
     highlight_index = None
-    for index, item in enumerate(config_dict['rules_list']):
-        if item['enabled'] is False:
-            continue
-        app_name_condition = True
-        if len(item['app_name']) > 0:
-            app_name_condition = item['app_name'].lower() in app_name.lower()
-        window_title_condition = True
-        if len(item['window_title']) > 0:
-            window_title_condition = item['window_title'].lower() in window_title.lower()
-        if app_name_condition and window_title_condition:
-            switch_queue_add(str(item['switch_to']))
-            highlight_index = index
-            break
+    remote_profile = get_remote_profile_to_apply(app_name, window_title)
+    if remote_profile is not None:
+        switch_queue_add(remote_profile)
+    else:
+        matched_profile = None
+        for index, item in enumerate(config_dict['rules_list']):
+            if item['enabled'] is False:
+                continue
+            app_name_condition = True
+            if len(item['app_name']) > 0:
+                app_name_condition = item['app_name'].lower() in app_name.lower()
+            window_title_condition = True
+            if len(item['window_title']) > 0:
+                window_title_condition = item['window_title'].lower() in window_title.lower()
+            if app_name_condition and window_title_condition:
+                matched_profile = '' if item['switch_to'] is None else str(item['switch_to'])
+                highlight_index = index
+                break
+        if remote_sender is not None:
+            remote_sender.set_profile(matched_profile, focus_changed)
+        elif matched_profile is not None:
+            switch_queue_add(matched_profile)
+    update_remote_status(remote_profile)
 
     for index, item in enumerate(config_dict['rules_list']):
         if index == highlight_index:
@@ -689,6 +778,14 @@ config_dict['rules_list'] = []
 config_dict['autoswitch_enabled'] = True
 config_dict['close_to_tray'] = False
 config_dict['start_minimized'] = False
+config_dict['remote_mode'] = remote_link.REMOTE_MODE_OFF
+config_dict['remote_host'] = ''
+config_dict['remote_port'] = remote_link.DEFAULT_PORT
+config_dict['remote_listen_address'] = remote_link.DEFAULT_LISTEN_ADDRESS
+config_dict['remote_allowlist'] = ''
+config_dict['remote_viewer_app'] = ''
+config_dict['remote_viewer_title'] = ''
+config_dict['remote_secret'] = ''
 
 def clean_input(str_input):
     return str_input.strip()
@@ -862,6 +959,104 @@ def rule_shift_down():
     update_rule_list_display()
     save_config()
 
+remote_window = None
+REMOTE_WINDOW_WIDTH = scaled_size(560)
+REMOTE_WINDOW_HEIGHT = scaled_size(440)
+
+def save_remote_click(window, fields):
+    mode = fields['mode'].get()
+    new_config = {'remote_mode': mode, 'remote_secret': fields['secret'].get().strip()}
+    try:
+        if mode == remote_link.REMOTE_MODE_SENDER:
+            new_config['remote_host'] = fields['host'].get().strip()
+            if len(new_config['remote_host']) == 0:
+                raise ValueError("Please enter the address of the local computer.")
+            new_config['remote_port'] = remote_link.parse_port(fields['sender_port'].get())
+        elif mode == remote_link.REMOTE_MODE_RECEIVER:
+            new_config['remote_port'] = remote_link.parse_port(fields['receiver_port'].get())
+            new_config['remote_listen_address'] = fields['listen_address'].get().strip() or remote_link.DEFAULT_LISTEN_ADDRESS
+            new_config['remote_allowlist'] = fields['allowlist'].get().strip()
+            remote_link.parse_allowlist(new_config['remote_allowlist'])
+            new_config['remote_viewer_app'] = clean_input(fields['viewer_app'].get())
+            new_config['remote_viewer_title'] = clean_input(fields['viewer_title'].get())
+            if len(new_config['remote_viewer_app']) == 0 and len(new_config['remote_viewer_title']) == 0:
+                raise ValueError("Please enter the app name and/or window title of your RDP/VNC viewer.")
+    except ValueError as e:
+        messagebox.showerror("Error", f"Invalid settings:\n\n{e}", parent=window)
+        return
+    config_dict.update(new_config)
+    save_config()
+    error = remote_apply_config()
+    if error is not None:
+        messagebox.showerror("Error", f"Could not start remote mode:\n\n{error}", parent=window)
+        return
+    if mode == remote_link.REMOTE_MODE_SENDER:
+        connection_info_str.set("Remote sender mode: duckyPad not used on this computer")
+    elif THIS_DUCKYPAD.info_dict is None:
+        duckypad_connect()
+    window.destroy()
+
+def create_remote_window():
+    global remote_window
+    if remote_window is not None and remote_window.winfo_exists():
+        remote_window.lift()
+        return
+    remote_window = Toplevel(root)
+    remote_window.title("Remote (RDP/VNC)")
+    remote_window.geometry(f"{REMOTE_WINDOW_WIDTH}x{REMOTE_WINDOW_HEIGHT}")
+    remote_window.resizable(width=FALSE, height=FALSE)
+    remote_window.grab_set()
+
+    fields = {}
+    fields['mode'] = StringVar(value=remote_mode())
+    Radiobutton(remote_window, text="Off", variable=fields['mode'], value=remote_link.REMOTE_MODE_OFF).place(x=scaled_size(20), y=scaled_size(5))
+    Radiobutton(remote_window, text="Sender: this app runs INSIDE the RDP/VNC session", variable=fields['mode'], value=remote_link.REMOTE_MODE_SENDER).place(x=scaled_size(20), y=scaled_size(30))
+    Radiobutton(remote_window, text="Receiver: the duckyPad is connected to THIS computer", variable=fields['mode'], value=remote_link.REMOTE_MODE_RECEIVER).place(x=scaled_size(20), y=scaled_size(55))
+
+    sender_lf = LabelFrame(remote_window, text="Sender", width=scaled_size(540), height=scaled_size(60))
+    sender_lf.place(x=scaled_size(10), y=scaled_size(90))
+    Label(sender_lf, text="Send to address:").place(x=scaled_size(10), y=scaled_size(5))
+    fields['host'] = Entry(sender_lf)
+    fields['host'].place(x=scaled_size(150), y=scaled_size(5), width=scaled_size(200))
+    fields['host'].insert(0, str(config_dict.get('remote_host', '')))
+    Label(sender_lf, text="Port:").place(x=scaled_size(370), y=scaled_size(5))
+    fields['sender_port'] = Entry(sender_lf)
+    fields['sender_port'].place(x=scaled_size(420), y=scaled_size(5), width=scaled_size(80))
+    fields['sender_port'].insert(0, str(config_dict.get('remote_port', remote_link.DEFAULT_PORT)))
+
+    receiver_lf = LabelFrame(remote_window, text="Receiver", width=scaled_size(540), height=scaled_size(180))
+    receiver_lf.place(x=scaled_size(10), y=scaled_size(160))
+    Label(receiver_lf, text="Listen address:").place(x=scaled_size(10), y=scaled_size(5))
+    fields['listen_address'] = Entry(receiver_lf)
+    fields['listen_address'].place(x=scaled_size(150), y=scaled_size(5), width=scaled_size(200))
+    fields['listen_address'].insert(0, str(config_dict.get('remote_listen_address', remote_link.DEFAULT_LISTEN_ADDRESS)))
+    Label(receiver_lf, text="Port:").place(x=scaled_size(370), y=scaled_size(5))
+    fields['receiver_port'] = Entry(receiver_lf)
+    fields['receiver_port'].place(x=scaled_size(420), y=scaled_size(5), width=scaled_size(80))
+    fields['receiver_port'].insert(0, str(config_dict.get('remote_port', remote_link.DEFAULT_PORT)))
+    Label(receiver_lf, text="Allowed senders:").place(x=scaled_size(10), y=scaled_size(35))
+    fields['allowlist'] = Entry(receiver_lf)
+    fields['allowlist'].place(x=scaled_size(150), y=scaled_size(35), width=scaled_size(200))
+    fields['allowlist'].insert(0, str(config_dict.get('remote_allowlist', '')))
+    Label(receiver_lf, text="IPs or CIDRs, blank = any").place(x=scaled_size(360), y=scaled_size(35))
+    Label(receiver_lf, text="Viewer app name contains:").place(x=scaled_size(10), y=scaled_size(65))
+    fields['viewer_app'] = Entry(receiver_lf)
+    fields['viewer_app'].place(x=scaled_size(240), y=scaled_size(65), width=scaled_size(110))
+    fields['viewer_app'].insert(0, str(config_dict.get('remote_viewer_app', '')))
+    Label(receiver_lf, text="Viewer window title contains:").place(x=scaled_size(10), y=scaled_size(95))
+    fields['viewer_title'] = Entry(receiver_lf)
+    fields['viewer_title'].place(x=scaled_size(240), y=scaled_size(95), width=scaled_size(110))
+    fields['viewer_title'].insert(0, str(config_dict.get('remote_viewer_title', '')))
+    Label(receiver_lf, text="e.g. mstsc, vncviewer").place(x=scaled_size(360), y=scaled_size(65))
+    Label(receiver_lf, text="Remote profiles apply only while the viewer is the active window.").place(x=scaled_size(10), y=scaled_size(130))
+
+    Label(remote_window, text="Shared secret (optional, same on both ends):").place(x=scaled_size(20), y=scaled_size(355))
+    fields['secret'] = Entry(remote_window, show='*')
+    fields['secret'].place(x=scaled_size(380), y=scaled_size(355), width=scaled_size(160))
+    fields['secret'].insert(0, str(config_dict.get('remote_secret', '')))
+
+    Button(remote_window, text="Save", command=lambda: save_remote_click(remote_window, fields)).place(x=scaled_size(10), y=scaled_size(390), width=scaled_size(540))
+
 rules_lf = LabelFrame(root, text="Autoswitch rules", width=scaled_size(620), height=scaled_size(410))
 rules_lf.place(x=scaled_size(PADDING), y=scaled_size(215)) 
 
@@ -997,7 +1192,11 @@ dp_fw_update_label.place(x=scaled_size(5), y=scaled_size(30))
 # ------------------
 
 root.update()
-duckypad_connect()
+remote_apply_config()
+if remote_mode() != remote_link.REMOTE_MODE_SENDER:
+    duckypad_connect()
+else:
+    connection_info_str.set("Remote sender mode: duckyPad not used on this computer")
 
 def contains_jump_by_number():
     for item in config_dict['rules_list']:
@@ -1029,6 +1228,8 @@ RTC_SYNC_FREQ_SECONDS = 30
 
 def sync_rtc():
     root.after(RTC_SYNC_FREQ_SECONDS*1000, sync_rtc)
+    if remote_mode() == remote_link.REMOTE_MODE_SENDER:
+        return
     try:
         if THIS_DUCKYPAD.info_dict is not None:
             # NEW: On Linux, open before sync

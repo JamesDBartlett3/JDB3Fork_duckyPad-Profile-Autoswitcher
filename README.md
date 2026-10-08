@@ -135,6 +135,41 @@ python3 duckypad_autoprofile.py --minimized
 
 This is useful for auto-starting the app on system boot without showing the window.
 
+## RDP / VNC Support
+
+Profile autoswitching can also work **inside a remote desktop session**. Run one copy of the app on each computer and let them talk to each other:
+
+- **Remote instance** (the computer you are remotely controlling, inside the RDP/VNC session) runs as a **Sender**. It evaluates its autoswitch rules as usual, but sends the resulting profile name over the network instead of to a duckyPad.
+- **Local instance** (the computer your duckyPad is plugged into) runs as a **Receiver**. While your RDP/VNC viewer is the active window, it switches the duckyPad to the profile requested by the remote instance. When the viewer loses focus, the normal local rules apply again.
+
+### Setup
+
+Click `Remote...` in the Dashboard on both computers.
+
+**Remote computer (inside the session):**
+
+1. Select **Sender**.
+2. `Send to address`: the address of the local computer, as seen from the remote computer.
+3. `Port`: must match the receiver's port (default `52007`).
+4. Create autoswitch rules as usual (e.g. App name `code` → Profile `VS Code`).
+
+**Local computer (duckyPad attached):**
+
+1. Select **Receiver**.
+2. `Listen address` / `Port`: where to listen for messages (default `0.0.0.0:52007`, i.e. all interfaces).
+3. `Allowed senders` (optional): comma-separated IP addresses or CIDR networks, e.g. `192.168.1.20, 10.0.0.0/8`. Leave blank to accept anyone.
+4. `Viewer app name contains` and/or `Viewer window title contains`: identify your RDP/VNC viewer, e.g. `mstsc` or `vncviewer`.
+
+Optionally set the same **Shared secret** on both ends, so the receiver ignores messages that aren't signed with it.
+
+### Notes
+
+- The sender sends a message **immediately** whenever its focused window changes, then repeats it every few seconds as a heartbeat. The receiver ignores a sender that has been silent for more than 10 seconds, and when the sender has no matching rule.
+- Messages are small UDP datagrams. The remote computer must be able to reach the local computer on the chosen port (check firewalls / NAT, or use a VPN / tunnel).
+- Messages are **not encrypted**, and the shared secret does not protect against replayed messages. Only use this on networks you trust, and use `Allowed senders`.
+- The sender does not need a duckyPad connected.
+- Settings are stored in `config.txt` (`remote_*` keys).
+
 ## Debugging
 
 If you encounter issues, a debug version of the app is included that shows a console window with diagnostic output:
