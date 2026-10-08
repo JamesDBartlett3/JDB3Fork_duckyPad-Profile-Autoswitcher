@@ -55,11 +55,14 @@ def decode_message(data, secret=''):
     if not isinstance(message, dict) or message.get('v') != PROTOCOL_VERSION:
         raise ValueError("unsupported message")
     profile = message.get('profile')
-    if not isinstance(profile, str) or len(profile) > MAX_PROFILE_NAME_LENGTH:
+    # 0x00-0xFF only: profile names are written byte-wise into the 64-byte HID buffer.
+    if not isinstance(profile, str) or len(profile) > MAX_PROFILE_NAME_LENGTH or any(ord(ch) > 0xFF for ch in profile):
         raise ValueError("invalid profile")
     if secret:
         sig = message.get('sig')
-        if not isinstance(sig, str) or not hmac.compare_digest(sig, _sign(secret, profile)):
+        # Compare as bytes: compare_digest raises TypeError on non-ASCII str, and an
+        # attacker-supplied 'sig' must never be able to raise out of decode_message.
+        if not isinstance(sig, str) or not hmac.compare_digest(sig.encode('utf8', 'replace'), _sign(secret, profile).encode('ascii')):
             raise ValueError("bad signature")
     return profile
 
@@ -207,7 +210,7 @@ class RemoteReceiver:
             return False
         try:
             profile = decode_message(data, self.secret)
-        except ValueError:
+        except (ValueError, TypeError):
             return False
         with self._lock:
             self._profile = profile
