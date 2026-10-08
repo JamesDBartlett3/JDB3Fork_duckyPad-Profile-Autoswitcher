@@ -541,11 +541,9 @@ discord_button.place(x=scaled_size(210), y=scaled_size(5), width=scaled_size(90)
 
 remote_button = Button(dashboard_lf, text="Remote...", command=lambda: create_remote_window())
 remote_button.place(x=scaled_size(310), y=scaled_size(5), width=scaled_size(90))
-
-remote_status_var = StringVar()
-remote_status_var.set("Remote (RDP/VNC): off")
-remote_status_label = Label(master=dashboard_lf, textvariable=remote_status_var)
-remote_status_label.place(x=scaled_size(10), y=scaled_size(65))
+# snapshot the native bg: default_button_color is a hardcoded 'grey' off-Windows that
+# reads as a disabled control next to the theme's own button color
+remote_button_default_bg = remote_button.cget('bg')
 
 autoswitch_status_var = StringVar()
 autoswitch_status_label = Label(master=dashboard_lf, textvariable=autoswitch_status_var, font='TkFixedFont', cursor="hand2")
@@ -658,6 +656,19 @@ remote_sender = None
 remote_receiver = None
 remote_status_base = "Remote (RDP/VNC): off"
 
+def update_remote_indicator(status_text):
+    """The Remote... button doubles as the status indicator: the label names the mode and state
+    (SENDING = sender running, LISTENING = receiver running, ERROR = start failure); single-line
+    so the button never grows down into the autoswitch status label."""
+    if "ERROR" in status_text:
+        remote_button.config(text="ERROR", bg='orange red')
+    elif "SENDING" in status_text:
+        remote_button.config(text="SENDING", bg='green')
+    elif "LISTENING" in status_text:
+        remote_button.config(text="LISTENING", bg='green')
+    else:
+        remote_button.config(text="Remote...", bg=remote_button_default_bg)
+
 def remote_mode():
     return config_dict.get('remote_mode', remote_link.REMOTE_MODE_OFF)
 
@@ -697,9 +708,9 @@ def remote_apply_config():
         remote_stop()
         remote_status_base = "Remote (RDP/VNC): ERROR, see Remote... settings"
         print("remote_apply_config:", e)
-        remote_status_var.set(remote_status_base)
+        update_remote_indicator(remote_status_base)
         return str(e)
-    remote_status_var.set(remote_status_base)
+    update_remote_indicator(remote_status_base)
     return None
 
 def get_remote_profile_to_apply(app_name, window_title):
@@ -709,13 +720,6 @@ def get_remote_profile_to_apply(app_name, window_title):
     if not remote_link.viewer_matches(app_name, window_title, config_dict.get('remote_viewer_app', ''), config_dict.get('remote_viewer_title', '')):
         return None
     return remote_receiver.get_profile()
-
-def update_remote_status(applied_remote_profile):
-    new_status = remote_status_base
-    if applied_remote_profile is not None:
-        new_status += f"  [applying remote profile: {applied_remote_profile}]"
-    if remote_status_var.get() != new_status:
-        remote_status_var.set(new_status)
 
 last_remote_window = None
 
@@ -760,7 +764,6 @@ def update_current_app_and_title():
             remote_sender.set_profile(matched_profile, focus_changed)
         elif matched_profile is not None:
             switch_queue_add(matched_profile)
-    update_remote_status(remote_profile)
 
     for index, item in enumerate(config_dict['rules_list']):
         if index == highlight_index:
@@ -1003,7 +1006,12 @@ def create_remote_window():
         return
     remote_window = Toplevel(root)
     remote_window.title("Remote (RDP/VNC)")
-    remote_window.geometry(f"{REMOTE_WINDOW_WIDTH}x{REMOTE_WINDOW_HEIGHT}")
+    # open centered over the main window with an explicit position: without one,
+    # Tk's geometry record keeps a placeholder +0+0 that would teleport the
+    # dialog when the mode handler re-asserts its position
+    x = max(0, root.winfo_x() + (root.winfo_width() - REMOTE_WINDOW_WIDTH) // 2)
+    y = max(0, root.winfo_y() + (root.winfo_height() - REMOTE_WINDOW_HEIGHT) // 2)
+    remote_window.geometry(f"{REMOTE_WINDOW_WIDTH}x{REMOTE_WINDOW_HEIGHT}+{x}+{y}")
     remote_window.resizable(width=FALSE, height=FALSE)
     remote_window.grab_set()
 
@@ -1050,27 +1058,49 @@ def create_remote_window():
     Label(receiver_lf, text="e.g. mstsc, vncviewer").place(x=scaled_size(360), y=scaled_size(65))
     Label(receiver_lf, text="Remote profiles apply only while the viewer is the active window.").place(x=scaled_size(10), y=scaled_size(130))
 
-    def update_remote_section_visibility(*_args):
-        mode = fields['mode'].get()
-        if mode == remote_link.REMOTE_MODE_SENDER:
-            sender_lf.place(x=scaled_size(10), y=scaled_size(90))
-        else:
-            sender_lf.place_forget()
-        if mode == remote_link.REMOTE_MODE_RECEIVER:
-            receiver_lf.place(x=scaled_size(10), y=scaled_size(160))
-        else:
-            receiver_lf.place_forget()
-
-    # trace added after the variable is created, so fire once for the initial mode
-    fields['mode'].trace_add("write", update_remote_section_visibility)
-    update_remote_section_visibility()
-
-    Label(remote_window, text="Shared secret (optional, same on both ends):").place(x=scaled_size(20), y=scaled_size(355))
+    secret_label = Label(remote_window, text="Shared secret (optional, same on both ends):")
+    secret_label.place(x=scaled_size(20), y=scaled_size(355))
     fields['secret'] = Entry(remote_window, show='*')
     fields['secret'].place(x=scaled_size(380), y=scaled_size(355), width=scaled_size(160))
     fields['secret'].insert(0, str(config_dict.get('remote_secret', '')))
 
-    Button(remote_window, text="Save", command=lambda: save_remote_click(remote_window, fields)).place(x=scaled_size(10), y=scaled_size(390), width=scaled_size(540))
+    save_button = Button(remote_window, text="Save", command=lambda: save_remote_click(remote_window, fields))
+    save_button.place(x=scaled_size(10), y=scaled_size(390), width=scaled_size(540))
+
+    def update_remote_section_visibility(*_args):
+        mode = fields['mode'].get()
+        show_sender = mode == remote_link.REMOTE_MODE_SENDER
+        show_receiver = mode == remote_link.REMOTE_MODE_RECEIVER
+        if show_sender:
+            sender_lf.place(x=scaled_size(10), y=scaled_size(90))
+        else:
+            sender_lf.place_forget()
+        if show_receiver:
+            receiver_lf.place(x=scaled_size(10), y=scaled_size(90))
+        else:
+            receiver_lf.place_forget()
+        # bottom of the last visible section, unscaled: receiver 90+180, sender 90+60, radios 55+20
+        content_bottom = 270 if show_receiver else 150 if show_sender else 75
+        secret_y = scaled_size(content_bottom + 15)
+        if mode == remote_link.REMOTE_MODE_OFF:
+            # nothing below the radios uses the secret, so hide the whole row
+            secret_label.place_forget()
+            fields['secret'].place_forget()
+            save_y = secret_y
+        else:
+            secret_label.place(x=scaled_size(20), y=secret_y)
+            fields['secret'].place(x=scaled_size(380), y=secret_y, width=scaled_size(160))
+            save_y = secret_y + scaled_size(35)
+        save_button.place(x=scaled_size(10), y=save_y, width=scaled_size(540))
+        height = save_y + scaled_size(50)
+        pos = remote_window.geometry().replace('-', '+-').split('+')
+        if len(pos) >= 3:
+            height = f"{height}+{pos[1]}+{pos[2]}"
+        remote_window.geometry(f"{REMOTE_WINDOW_WIDTH}x{height}")
+
+    # trace added after the variable is created, so fire once for the initial mode
+    fields['mode'].trace_add("write", update_remote_section_visibility)
+    update_remote_section_visibility()
 
 rules_lf = LabelFrame(root, text="Autoswitch rules", width=scaled_size(620), height=scaled_size(410))
 rules_lf.place(x=scaled_size(PADDING), y=scaled_size(215)) 
