@@ -1050,6 +1050,21 @@ def create_remote_window():
     Label(receiver_lf, text="e.g. mstsc, vncviewer").place(x=scaled_size(360), y=scaled_size(65))
     Label(receiver_lf, text="Remote profiles apply only while the viewer is the active window.").place(x=scaled_size(10), y=scaled_size(130))
 
+    def update_remote_section_visibility(*_args):
+        mode = fields['mode'].get()
+        if mode == remote_link.REMOTE_MODE_SENDER:
+            sender_lf.place(x=scaled_size(10), y=scaled_size(90))
+        else:
+            sender_lf.place_forget()
+        if mode == remote_link.REMOTE_MODE_RECEIVER:
+            receiver_lf.place(x=scaled_size(10), y=scaled_size(160))
+        else:
+            receiver_lf.place_forget()
+
+    # trace added after the variable is created, so fire once for the initial mode
+    fields['mode'].trace_add("write", update_remote_section_visibility)
+    update_remote_section_visibility()
+
     Label(remote_window, text="Shared secret (optional, same on both ends):").place(x=scaled_size(20), y=scaled_size(355))
     fields['secret'] = Entry(remote_window, show='*')
     fields['secret'].place(x=scaled_size(380), y=scaled_size(355), width=scaled_size(160))
