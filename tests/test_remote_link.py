@@ -98,6 +98,45 @@ class ReceiverTests(unittest.TestCase):
             tx.stop()
             rx.stop()
 
+    def test_per_port_slots(self):
+        rx = remote_link.RemoteReceiver("127.0.0.1", [52010, 52011], "10.0.0.1", "k")
+        self.assertTrue(rx.handle_datagram(remote_link.encode_message("Firefox", "k"), "10.0.0.1", port_index=0, now=0))
+        self.assertTrue(rx.handle_datagram(remote_link.encode_message("Autohotkey", "k"), "10.0.0.1", port_index=1, now=0))
+        self.assertEqual(rx.get_profile(0, now=1), "Firefox")
+        self.assertEqual(rx.get_profile(1, now=1), "Autohotkey")
+        # slots age independently: refreshing port 1 does not keep port 0 alive
+        rx.handle_datagram(remote_link.encode_message("Autohotkey", "k"), "10.0.0.1", port_index=1, now=remote_link.STALE_SECONDS)
+        self.assertIsNone(rx.get_profile(0, now=remote_link.STALE_SECONDS + 1))
+        self.assertEqual(rx.get_profile(1, now=remote_link.STALE_SECONDS + 1), "Autohotkey")
+
+    def test_two_senders_over_udp(self):
+        probes = []
+        for _ in range(2):
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            probe.bind(("127.0.0.1", 0))
+            probes.append(probe.getsockname()[1])
+            probe.close()
+        rx = remote_link.RemoteReceiver("127.0.0.1", probes, "127.0.0.1", "k")
+        rx.start()
+        senders = [remote_link.RemoteSender("127.0.0.1", port, "k") for port in probes]
+        for tx in senders:
+            tx.start()
+        try:
+            senders[0].set_profile("Firefox")
+            senders[1].set_profile("Autohotkey")
+            deadline = time.time() + 5
+            while (rx.get_profile(0) != "Firefox" or rx.get_profile(1) != "Autohotkey") and time.time() < deadline:
+                time.sleep(0.05)
+            self.assertEqual(rx.get_profile(0), "Firefox")
+            self.assertEqual(rx.get_profile(1), "Autohotkey")
+            # continued heartbeats from sender 2 must not disturb slot 0
+            time.sleep(remote_link.HEARTBEAT_SECONDS * 2)
+            self.assertEqual(rx.get_profile(0), "Firefox")
+        finally:
+            for tx in senders:
+                tx.stop()
+            rx.stop()
+
 
 class SenderTimingTests(unittest.TestCase):
     def setUp(self):

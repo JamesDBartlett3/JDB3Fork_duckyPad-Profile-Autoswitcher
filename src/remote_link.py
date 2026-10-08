@@ -16,6 +16,7 @@ import hmac
 import hashlib
 import ipaddress
 import json
+import select
 import socket
 import threading
 import time
@@ -162,29 +163,32 @@ class RemoteSender:
             sock.close()
 
 class RemoteReceiver:
-    def __init__(self, address, port, allowlist_str='', secret=''):
+    def __init__(self, address, ports, allowlist_str='', secret=''):
         self.address = address
-        self.port = port
+        # one port per sending instance; several senders may feed one receiver, each
+        # through its own port, so their profiles never overwrite each other
+        self.ports = list(ports) if isinstance(ports, (list, tuple)) else [ports]
         self.secret = secret
         self.allowlist = parse_allowlist(allowlist_str)
-        self._profile = ''
-        self._received_at = None
+        self._profiles = {}  # port index -> (profile, received_at)
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = None
-        self._sock = None
+        self._socks = []
 
     def start(self):
-        """Binds the socket (raises OSError on failure) and starts listening in the background."""
+        """Binds one socket per port (raises OSError on failure) and starts listening in the background."""
         family = socket.AF_INET6 if ':' in self.address else socket.AF_INET
-        sock = socket.socket(family, socket.SOCK_DGRAM)
         try:
-            sock.bind((self.address, self.port))
+            for port in self.ports:
+                sock = socket.socket(family, socket.SOCK_DGRAM)
+                sock.bind((self.address, port))
+                self._socks.append(sock)
         except OSError:
-            sock.close()
+            for sock in self._socks:
+                sock.close()
+            self._socks = []
             raise
-        sock.settimeout(0.5)
-        self._sock = sock
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -192,20 +196,24 @@ class RemoteReceiver:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(2)
-        if self._sock is not None:
-            self._sock.close()
+        for sock in self._socks:
+            sock.close()
+        self._socks = []
 
     def _run(self):
         while not self._stop.is_set():
             try:
-                data, source = self._sock.recvfrom(MAX_DATAGRAM_SIZE + 1)
-            except socket.timeout:
-                continue
+                readable, _, _ = select.select(self._socks, [], [], 0.5)
             except OSError:
                 break
-            self.handle_datagram(data, source[0])
+            for sock in readable:
+                try:
+                    data, source = sock.recvfrom(MAX_DATAGRAM_SIZE + 1)
+                except OSError:
+                    continue
+                self.handle_datagram(data, source[0], port_index=self._socks.index(sock))
 
-    def handle_datagram(self, data, source_address, now=None):
+    def handle_datagram(self, data, source_address, port_index=0, now=None):
         if not is_address_allowed(source_address, self.allowlist):
             return False
         try:
@@ -213,14 +221,14 @@ class RemoteReceiver:
         except (ValueError, TypeError):
             return False
         with self._lock:
-            self._profile = profile
-            self._received_at = time.monotonic() if now is None else now
+            self._profiles[port_index] = (profile, time.monotonic() if now is None else now)
         return True
 
-    def get_profile(self, now=None):
-        """Latest profile sent by the remote instance, or None if there is none or it has gone silent."""
+    def get_profile(self, port_index=0, now=None):
+        """Latest profile from the sender feeding the given port, or None if there is none or it has gone silent."""
         now = time.monotonic() if now is None else now
         with self._lock:
-            if self._received_at is None or now - self._received_at > STALE_SECONDS:
-                return None
-            return self._profile if len(self._profile) > 0 else None
+            entry = self._profiles.get(port_index)
+        if entry is None or now - entry[1] > STALE_SECONDS:
+            return None
+        return entry[0] if len(entry[0]) > 0 else None

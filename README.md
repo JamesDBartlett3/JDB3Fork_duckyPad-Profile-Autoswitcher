@@ -156,7 +156,7 @@ Click `Remote...` in the Dashboard on both computers.
 **Local computer (duckyPad attached):**
 
 1. Select **Receiver**.
-2. `Listen address` / `Port`: where to listen for messages (default `0.0.0.0:52007`, i.e. all interfaces).
+2. `Receive address` / `Port`: where to receive messages (default `0.0.0.0:52007`, i.e. all interfaces).
 3. `Allowed senders` (optional): comma-separated IP addresses or CIDR networks, e.g. `192.168.1.20, 10.0.0.0/8`. Leave blank to accept anyone.
 4. `Viewer app name contains` and/or `Viewer window title contains`: identify your RDP/VNC viewer, e.g. `mstsc` or `vncviewer`.
 
