@@ -1,0 +1,80 @@
+name: build-release
+
+# Builds Windows / macOS / Linux bundles and attaches them to a DRAFT release.
+# Publish the draft manually after checking it over.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: src
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            build: python _build_windows.py
+          - os: macos-latest
+            build: python _build_mac_pyinstaller.py
+          - os: ubuntu-latest
+            build: python _build_linux.py
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller
+
+      # The repo only carries _icon.ico; the macOS build script expects an icns
+      - name: Generate macOS icon
+        if: runner.os == 'macOS'
+        run: python -c "from PIL import Image; Image.open('_icon.ico').save('_icon.icns')"
+
+      - name: Run build script
+        run: ${{ matrix.build }}
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}
+          path: src/*.zip
+          if-no-files-found: error
+
+  draft-release:
+    name: Attach bundles to draft release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            TAG="draft-${GITHUB_RUN_NUMBER}"
+          fi
+          gh release create "$TAG" dist/* \
+            --draft \
+            --target "$GITHUB_SHA" \
+            --title "duckyPad Profile Autoswitcher $TAG" \
+            --generate-notes

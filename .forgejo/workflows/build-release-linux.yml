@@ -1,0 +1,82 @@
+name: Build Linux release (draft)
+
+# Linux-only counterpart to .github/workflows/build-release.yml (which runs the
+# full Windows/macOS/Linux matrix on GitHub). This one runs on the Forgejo
+# instance's own runner (label ubuntu-latest -> python:3.12 container).
+#
+# No secrets are stored in this file: GITHUB_TOKEN is the per-run token that
+# Forgejo injects into every job automatically. It is passed to git via a
+# credential helper and to curl via a header variable, so it never appears in
+# URLs, process arguments, or job logs.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone source
+        shell: bash
+        run: |
+          set -e
+          git config --global credential.helper '!f() { echo "username=ci"; echo "password=$GITHUB_TOKEN"; }; f'
+          git clone --depth=1 --branch "$GITHUB_REF_NAME" "http://forgejo:3001/$GITHUB_REPOSITORY.git" .
+
+      - name: Install build dependencies
+        shell: bash
+        working-directory: src
+        run: |
+          set -e
+          pip install --no-cache-dir -r requirements.txt pyinstaller
+
+      - name: Build Linux bundle
+        shell: bash
+        working-directory: src
+        run: |
+          set -e
+          python _build_linux.py
+
+      - name: Create draft release and attach zip
+        shell: bash
+        working-directory: src
+        run: |
+          set -e
+          ZIP=$(ls duckypad_autoprofile_*_linux_x64.zip 2>/dev/null | head -n1)
+          if [ -z "$ZIP" ]; then
+              echo "No linux zip was produced by the build"; exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+              TAG="draft-${GITHUB_RUN_NUMBER}"
+          else
+              TAG="$GITHUB_REF_NAME"
+          fi
+          API="http://forgejo:3001/api/v1/repos/$GITHUB_REPOSITORY/releases"
+          AUTH="Authorization: token $GITHUB_TOKEN"
+
+          REL_ID=$(curl -s -H "$AUTH" "$API/tags/$TAG" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))")
+          if [ -z "$REL_ID" ]; then
+              BODY=$(TAG="$TAG" python3 - <<'PY'
+          import json, os
+          t = os.environ["TAG"]
+          print(json.dumps({
+              "tag_name": t,
+              "name": "duckyPad Profile Autoswitcher " + t,
+              "draft": True,
+              "body": "Automated Linux build from Forgejo Actions.\n\nExtract the zip and see README.txt inside for setup notes (udev rules, running the app)."
+          }))
+          PY
+          )
+              REL_ID=$(curl -s -X POST -H "$AUTH" -H "Content-Type: application/json" -d "$BODY" "$API" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))")
+          fi
+          if [ -z "$REL_ID" ]; then
+              echo "Could not create or find a release for tag $TAG"; exit 1
+          fi
+
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H "$AUTH" -F "attachment=@$ZIP" "$API/$REL_ID/assets?name=$ZIP")
+          if [ "$CODE" != "201" ] && [ "$CODE" != "200" ]; then
+              echo "Asset upload failed with HTTP $CODE"; exit 1
+          fi
+          echo "Draft release $TAG updated with $ZIP (HTTP $CODE)"

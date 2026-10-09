@@ -1,8 +1,14 @@
 from glob import glob
 import os
-import PyInstaller.__main__
 import shutil
 import sys
+
+# pre-flight must run before PyInstaller is imported, so a missing pyinstaller
+# gets install instructions instead of a bare ModuleNotFoundError
+import _preflight
+_preflight.run_preflight()
+
+import PyInstaller.__main__
 
 if 'darwin' not in sys.platform:
     print("this script is for macOS only!")
@@ -47,6 +53,7 @@ PyInstaller.__main__.run([
     '--onefile',
     '--noconsole',
     '--add-data=_icon.ico:.',
+    '--hidden-import=PIL._tkinter_finder',
     f"--name={exe_file_name}"
 ])
 

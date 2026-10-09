@@ -14,11 +14,12 @@ import threading
 from hid_common import *
 import get_window
 import check_update
+import remote_link
 from platformdirs import *
 import subprocess
 import argparse
 import pystray
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageTk
 if sys.platform == 'win32':
     import winreg
 
@@ -266,7 +267,7 @@ def duckypad_connect():
         return False
 
     if len(all_dp_info_list) == 0:
-        connection_info_str.set("duckyPad not found")
+        update_connection_banner("duckyPad not found")
         return False
 
     selected_index = -1
@@ -289,7 +290,7 @@ def duckypad_connect():
     time.sleep(0.1)
     THIS_DUCKYPAD.device_type = user_selected_dp['dp_model']
     THIS_DUCKYPAD.info_dict = user_selected_dp
-    connection_info_str.set(f"Connected!      Model: {dp_model_lookup.get(THIS_DUCKYPAD.device_type)}      Serial: {THIS_DUCKYPAD.info_dict.get('serial')}      Firmware: {THIS_DUCKYPAD.info_dict.get('fw_version')}")
+    update_connection_banner(connected_pad_line())
     if 'linux' in sys.platform:
         myh.close()
     return True
@@ -339,7 +340,9 @@ def duckypad_write_with_retry(data_buf):
         if 'linux' in sys.platform:
             myh.close()
 
-        if len(dp_response) != PC_TO_DUCKYPAD_HID_BUF_SIZE:
+        # duckyPad Pro answers with a 16-byte report (the constant is the 64-byte PC->pad size),
+        # so only require the status byte at index 2 instead of an exact length
+        if len(dp_response) < 3:
             return DP_WRITE_FAIL
         if dp_response[2] == 0:
             return DP_WRITE_OK
@@ -368,7 +371,9 @@ def duckypad_write_with_retry(data_buf):
         if 'linux' in sys.platform:
             myh.close()
 
-        if len(dp_response) != PC_TO_DUCKYPAD_HID_BUF_SIZE:
+        # duckyPad Pro answers with a 16-byte report (the constant is the 64-byte PC->pad size),
+        # so only require the status byte at index 2 instead of an exact length
+        if len(dp_response) < 3:
             return DP_WRITE_FAIL
         if dp_response[2] == 0:
             return DP_WRITE_OK
@@ -402,24 +407,21 @@ def next_prof_click():
     threading.Thread(target=_prof_click_worker, args=(HID_COMMAND_NEXT_PROFILE,), daemon=True).start()
 
 # System tray functionality
+def icon_base_path():
+    """Where data files live: the script dir, or _MEIPASS in a PyInstaller bundle"""
+    if getattr(sys, 'frozen', False):
+        return sys._MEIPASS
+    return os.path.dirname(__file__)
+
 def create_tray_image():
     """Create a simple icon for the system tray"""
     try:
-        # Get the base path - works for both development and PyInstaller bundle
-        if getattr(sys, 'frozen', False):
-            # Running as compiled executable
-            base_path = sys._MEIPASS
-        else:
-            # Running as script
-            base_path = os.path.dirname(__file__)
-        
-        # Try to load the application icon
-        icon_path = os.path.join(base_path, '_icon.ico')
+        icon_path = os.path.join(icon_base_path(), '_icon.ico')
         if os.path.exists(icon_path):
             return Image.open(icon_path)
     except Exception as e:
         print(f"Could not load icon file: {e}")
-    
+
     # Fallback: create a simple programmatic icon
     width = 64
     height = 64
@@ -430,6 +432,17 @@ def create_tray_image():
         fill='white'
     )
     return image
+
+def set_window_icon():
+    """Give the window/taskbar the app icon (Tk shows a generic default without it)"""
+    try:
+        icon_path = os.path.join(icon_base_path(), '_icon.ico')
+        if os.path.exists(icon_path):
+            photo = ImageTk.PhotoImage(Image.open(icon_path))
+            root._window_icon_ref = photo  # Tk keeps no reference; PhotoImage must stay alive
+            root.iconphoto(True, photo)
+    except Exception as e:
+        print(f"Could not set window icon: {e}")
 
 def show_window():
     """Show the main window and bring it to front"""
@@ -472,6 +485,7 @@ def run_tray_icon():
 
 root = Tk()
 root.title("duckyPad autoswitcher " + THIS_VERSION_NUMBER)
+set_window_icon()
 root.geometry(f"{MAIN_WINDOW_WIDTH}x{MAIN_WINDOW_HEIGHT}")
 root.resizable(width=FALSE, height=FALSE)
 root.protocol("WM_DELETE_WINDOW", on_closing)
@@ -482,7 +496,7 @@ connection_info_str = StringVar()
 connection_info_str.set("<--- Press Connect button")
 connection_info_lf = LabelFrame(root, text="Connection", width=scaled_size(620), height=scaled_size(60))
 connection_info_lf.place(x=scaled_size(PADDING), y=scaled_size(0)) 
-connection_info_label = Label(master=connection_info_lf, textvariable=connection_info_str)
+connection_info_label = Label(master=connection_info_lf, textvariable=connection_info_str, justify='left')
 connection_info_label.place(x=scaled_size(110), y=scaled_size(5))
 
 connection_button = Button(connection_info_lf, text="Connect", command=duckypad_connect)
@@ -537,6 +551,13 @@ discord_button.place(x=scaled_size(110), y=scaled_size(5), width=scaled_size(90)
 
 discord_button = Button(dashboard_lf, text="Backup", command=open_save_folder)
 discord_button.place(x=scaled_size(210), y=scaled_size(5), width=scaled_size(90))
+
+remote_button = Button(dashboard_lf, text="Remote...", command=lambda: create_remote_window())
+remote_button.place(x=scaled_size(310), y=scaled_size(5), width=scaled_size(90))
+# snapshot the native bg: default_button_color is a hardcoded 'grey' off-Windows that
+# reads as a disabled control next to the theme's own button color
+remote_button_default_bg = remote_button.cget('bg')
+remote_button_default_fg = remote_button.cget('fg')
 
 autoswitch_status_var = StringVar()
 autoswitch_status_label = Label(master=dashboard_lf, textvariable=autoswitch_status_var, font='TkFixedFont', cursor="hand2")
@@ -604,13 +625,13 @@ last_switch = None
 def update_banner_text(switch_result):
     if switch_result == DP_WRITE_OK:
         connection_info_label.place(x=scaled_size(110), y=scaled_size(5))
-        connection_info_str.set(f"Connected!      Model: {dp_model_lookup.get(THIS_DUCKYPAD.device_type)}      Serial: {THIS_DUCKYPAD.info_dict.get('serial')}      Firmware: {THIS_DUCKYPAD.info_dict.get('fw_version')}")
+        update_connection_banner(connected_pad_line())
     elif switch_result == DP_WRITE_BUSY:
         pass
         # print("DUCKYPAD IS BUSY! Retrying later")
     elif switch_result == DP_WRITE_FAIL:
         connection_info_label.place(x=scaled_size(130), y=scaled_size(5))
-        connection_info_str.set(f"duckyPad Disappeared!")
+        update_connection_banner("duckyPad Disappeared!")
     root.update()
 
 def t1_worker():
@@ -645,7 +666,138 @@ def switch_queue_add(profile_target_name):
 
 WINDOW_CHECK_FREQUENCY_MS = 100
 
+remote_sender = None
+remote_receiver = None
+remote_status_base = "off"
+
+def update_remote_indicator(status_text):
+    """The Remote... button doubles as the status indicator: the label names the mode and state
+    (SENDING = sender running, RECEIVING = receiver running, ERROR = start failure); single-line
+    so the button never grows down into the autoswitch status label."""
+    if "ERROR" in status_text:
+        remote_button.config(text="ERROR", bg='orange red', fg=remote_button_default_fg)
+    elif "SENDING" in status_text:
+        remote_button.config(text="SENDING", bg='green', fg='white')
+    elif "RECEIVING" in status_text:
+        remote_button.config(text="RECEIVING", bg='green', fg='white')
+    else:
+        remote_button.config(text="Remote...", bg=remote_button_default_bg, fg=remote_button_default_fg)
+
+def remote_mode():
+    return config_dict.get('remote_mode', remote_link.REMOTE_MODE_OFF)
+
+def connected_pad_line():
+    return f"Connected!      Model: {dp_model_lookup.get(THIS_DUCKYPAD.device_type)}      Serial: {THIS_DUCKYPAD.info_dict.get('serial')}"
+
+def remote_connection_line():
+    return "Remote connection: " + remote_status_base
+
+def update_connection_banner(pad_line):
+    """The Connection banner: pad info, with the remote line on its own line below it in receiver
+    mode. Sender mode never touches the pad, so the banner is just the remote line."""
+    pad_line = pad_line.split("\n")[0]
+    two_lines = remote_mode() == remote_link.REMOTE_MODE_RECEIVER
+    connection_info_label.place(x=scaled_size(110), y=scaled_size(1 if two_lines else 5))
+    if remote_mode() == remote_link.REMOTE_MODE_SENDER:
+        connection_info_str.set(remote_connection_line())
+    elif remote_mode() == remote_link.REMOTE_MODE_RECEIVER:
+        connection_info_str.set(pad_line + "\n" + remote_connection_line())
+    else:
+        connection_info_str.set(pad_line)
+
+def refresh_remote_ui():
+    """Syncs everything the remote mode renders: button indicator, banner, Connect availability.
+    Called on every remote (re)apply so mode changes take effect without a restart."""
+    update_remote_indicator(remote_status_base)
+    connection_button.config(state='disabled' if remote_mode() == remote_link.REMOTE_MODE_SENDER else 'normal')
+    if remote_mode() == remote_link.REMOTE_MODE_SENDER:
+        dp_fw_update_label.config(text='duckyPad firmware: N/A')
+    elif THIS_DUCKYPAD.info_dict is not None:
+        # restore the real version without re-running the network update check
+        dp_fw_update_label.config(text=f"duckyPad firmware: {THIS_DUCKYPAD.info_dict.get('fw_version')}")
+    pad_line = connection_info_str.get().split("\n")[0]
+    if "Remote connection: " in pad_line or pad_line.startswith("Remote sender mode:"):
+        # stale banner from a previously-applied remote mode; fall back to the pad's real state
+        pad_line = connected_pad_line() if THIS_DUCKYPAD.info_dict is not None else "<--- Press Connect button"
+    update_connection_banner(pad_line)
+
+def remote_stop():
+    global remote_sender, remote_receiver
+    if remote_sender is not None:
+        remote_sender.stop()
+        remote_sender = None
+    if remote_receiver is not None:
+        remote_receiver.stop()
+        remote_receiver = None
+
+def remote_apply_config():
+    """(Re)starts the remote sender/receiver according to config. Returns an error message, or None on success."""
+    global remote_sender, remote_receiver, remote_status_base
+    remote_stop()
+    mode = remote_mode()
+    secret = config_dict.get('remote_secret', '')
+    try:
+        if mode == remote_link.REMOTE_MODE_SENDER:
+            port = remote_link.parse_port(config_dict.get('remote_port', remote_link.DEFAULT_PORT))
+            host = str(config_dict.get('remote_host', '')).strip()
+            if len(host) == 0:
+                raise ValueError("Destination address is empty")
+            remote_sender = remote_link.RemoteSender(host, port, secret)
+            remote_sender.start()
+            remote_status_base = f"SENDING profile to {host}:{port}"
+        elif mode == remote_link.REMOTE_MODE_RECEIVER:
+            default_port = remote_link.parse_port(config_dict.get('remote_port', remote_link.DEFAULT_PORT))
+            address = str(config_dict.get('remote_listen_address', remote_link.DEFAULT_LISTEN_ADDRESS)).strip()
+            entries = remote_viewer_entries(default_port)
+            ports = [entry['port'] for entry in entries] or [default_port]
+            remote_receiver = remote_link.RemoteReceiver(address, ports, config_dict.get('remote_allowlist', ''), secret)
+            remote_receiver.start()
+            if len(ports) > 1:
+                remote_status_base = f"RECEIVING on {address} ports {', '.join(str(p) for p in ports)}"
+            else:
+                remote_status_base = f"RECEIVING on {address}:{ports[0]}"
+        else:
+            remote_status_base = "off"
+    except Exception as e:
+        remote_stop()
+        remote_status_base = "ERROR, see Remote... settings"
+        print("remote_apply_config:", e)
+        refresh_remote_ui()
+        return str(e)
+    refresh_remote_ui()
+    return None
+
+def remote_viewer_entries(default_port=None):
+    """Viewer filters paired with the port their sending instance feeds. The viewer app and title
+    fields accept comma-separated lists that pair positionally with remote_viewer_ports; viewers
+    without a dedicated port fall back to remote_port. Raises ValueError on malformed ports."""
+    if default_port is None:
+        default_port = remote_link.parse_port(config_dict.get('remote_port', remote_link.DEFAULT_PORT))
+    apps = [s.strip() for s in str(config_dict.get('remote_viewer_app', '')).split(',') if s.strip()]
+    titles = [s.strip() for s in str(config_dict.get('remote_viewer_title', '')).split(',') if s.strip()]
+    ports = [remote_link.parse_port(p) for p in str(config_dict.get('remote_viewer_ports', '')).split(',') if p.strip()]
+    entries = []
+    for i in range(max(len(apps), len(titles))):
+        entries.append({
+            'app': apps[i] if i < len(apps) else '',
+            'title': titles[i] if i < len(titles) else '',
+            'port': ports[i] if i < len(ports) else default_port,
+        })
+    return entries
+
+def get_remote_profile_to_apply(app_name, window_title):
+    """Profile requested by the remote instance whose viewer is the active local window."""
+    if remote_receiver is None:
+        return None
+    for port_index, entry in enumerate(remote_viewer_entries()):
+        if remote_link.viewer_matches(app_name, window_title, entry['app'], entry['title']):
+            return remote_receiver.get_profile(port_index)
+    return None
+
+last_remote_window = None
+
 def update_current_app_and_title():
+    global last_remote_window
 
     root.after(WINDOW_CHECK_FREQUENCY_MS, update_current_app_and_title)
 
@@ -655,23 +807,36 @@ def update_current_app_and_title():
 
     if rule_window is not None and rule_window.winfo_exists():
         return
+    focus_changed = (app_name, window_title) != last_remote_window
+    last_remote_window = (app_name, window_title)
     if config_dict['autoswitch_enabled'] is False:
+        if remote_sender is not None:
+            remote_sender.set_profile('', focus_changed)
         return
 
     highlight_index = None
-    for index, item in enumerate(config_dict['rules_list']):
-        if item['enabled'] is False:
-            continue
-        app_name_condition = True
-        if len(item['app_name']) > 0:
-            app_name_condition = item['app_name'].lower() in app_name.lower()
-        window_title_condition = True
-        if len(item['window_title']) > 0:
-            window_title_condition = item['window_title'].lower() in window_title.lower()
-        if app_name_condition and window_title_condition:
-            switch_queue_add(str(item['switch_to']))
-            highlight_index = index
-            break
+    remote_profile = get_remote_profile_to_apply(app_name, window_title)
+    if remote_profile is not None:
+        switch_queue_add(remote_profile)
+    else:
+        matched_profile = None
+        for index, item in enumerate(config_dict['rules_list']):
+            if item['enabled'] is False:
+                continue
+            app_name_condition = True
+            if len(item['app_name']) > 0:
+                app_name_condition = item['app_name'].lower() in app_name.lower()
+            window_title_condition = True
+            if len(item['window_title']) > 0:
+                window_title_condition = item['window_title'].lower() in window_title.lower()
+            if app_name_condition and window_title_condition:
+                matched_profile = '' if item['switch_to'] is None else str(item['switch_to'])
+                highlight_index = index
+                break
+        if remote_sender is not None:
+            remote_sender.set_profile(matched_profile, focus_changed)
+        elif matched_profile is not None:
+            switch_queue_add(matched_profile)
 
     for index, item in enumerate(config_dict['rules_list']):
         if index == highlight_index:
@@ -689,6 +854,15 @@ config_dict['rules_list'] = []
 config_dict['autoswitch_enabled'] = True
 config_dict['close_to_tray'] = False
 config_dict['start_minimized'] = False
+config_dict['remote_mode'] = remote_link.REMOTE_MODE_OFF
+config_dict['remote_host'] = ''
+config_dict['remote_port'] = remote_link.DEFAULT_PORT
+config_dict['remote_listen_address'] = remote_link.DEFAULT_LISTEN_ADDRESS
+config_dict['remote_allowlist'] = ''
+config_dict['remote_viewer_app'] = ''
+config_dict['remote_viewer_title'] = ''
+config_dict['remote_viewer_ports'] = ''
+config_dict['remote_secret'] = ''
 
 def clean_input(str_input):
     return str_input.strip()
@@ -862,6 +1036,155 @@ def rule_shift_down():
     update_rule_list_display()
     save_config()
 
+remote_window = None
+REMOTE_WINDOW_WIDTH = scaled_size(560)
+REMOTE_WINDOW_HEIGHT = scaled_size(440)
+
+def save_remote_click(window, fields):
+    mode = fields['mode'].get()
+    new_config = {'remote_mode': mode, 'remote_secret': fields['secret'].get().strip()}
+    try:
+        if mode == remote_link.REMOTE_MODE_SENDER:
+            new_config['remote_host'] = fields['host'].get().strip()
+            if len(new_config['remote_host']) == 0:
+                raise ValueError("Please enter the address of the local computer.")
+            new_config['remote_port'] = remote_link.parse_port(fields['sender_port'].get())
+        elif mode == remote_link.REMOTE_MODE_RECEIVER:
+            new_config['remote_port'] = remote_link.parse_port(fields['receiver_port'].get())
+            new_config['remote_listen_address'] = fields['listen_address'].get().strip() or remote_link.DEFAULT_LISTEN_ADDRESS
+            new_config['remote_allowlist'] = fields['allowlist'].get().strip()
+            remote_link.parse_allowlist(new_config['remote_allowlist'])
+            new_config['remote_viewer_app'] = clean_input(fields['viewer_app'].get())
+            new_config['remote_viewer_title'] = clean_input(fields['viewer_title'].get())
+            new_config['remote_viewer_ports'] = clean_input(fields['viewer_ports'].get())
+            if len(new_config['remote_viewer_app']) == 0 and len(new_config['remote_viewer_title']) == 0:
+                raise ValueError("Please enter the app name and/or window title of your RDP/VNC viewer.")
+            entries = remote_viewer_entries(new_config['remote_port'])
+            if len(entries) > 1:
+                port_list = [entry['port'] for entry in entries]
+                if len(set(port_list)) != len(port_list):
+                    raise ValueError("Each viewer needs its own port, otherwise the senders' profiles would overwrite each other.")
+    except ValueError as e:
+        messagebox.showerror("Error", f"Invalid settings:\n\n{e}", parent=window)
+        return
+    config_dict.update(new_config)
+    save_config()
+    error = remote_apply_config()
+    if error is not None:
+        messagebox.showerror("Error", f"Could not start remote mode:\n\n{error}", parent=window)
+        return
+    if mode != remote_link.REMOTE_MODE_SENDER and THIS_DUCKYPAD.info_dict is None:
+        duckypad_connect()
+    window.destroy()
+
+def create_remote_window():
+    global remote_window
+    if remote_window is not None and remote_window.winfo_exists():
+        remote_window.lift()
+        return
+    remote_window = Toplevel(root)
+    remote_window.title("Remote (RDP/VNC)")
+    # open centered over the main window with an explicit position: without one,
+    # Tk's geometry record keeps a placeholder +0+0 that would teleport the
+    # dialog when the mode handler re-asserts its position
+    x = max(0, root.winfo_x() + (root.winfo_width() - REMOTE_WINDOW_WIDTH) // 2)
+    y = max(0, root.winfo_y() + (root.winfo_height() - REMOTE_WINDOW_HEIGHT) // 2)
+    remote_window.geometry(f"{REMOTE_WINDOW_WIDTH}x{REMOTE_WINDOW_HEIGHT}+{x}+{y}")
+    remote_window.resizable(width=FALSE, height=FALSE)
+    remote_window.grab_set()
+
+    fields = {}
+    fields['mode'] = StringVar(value=remote_mode())
+    Radiobutton(remote_window, text="Off", variable=fields['mode'], value=remote_link.REMOTE_MODE_OFF).place(x=scaled_size(20), y=scaled_size(5))
+    Radiobutton(remote_window, text="Sender: this app runs INSIDE the RDP/VNC session", variable=fields['mode'], value=remote_link.REMOTE_MODE_SENDER).place(x=scaled_size(20), y=scaled_size(30))
+    Radiobutton(remote_window, text="Receiver: the duckyPad is connected to THIS computer", variable=fields['mode'], value=remote_link.REMOTE_MODE_RECEIVER).place(x=scaled_size(20), y=scaled_size(55))
+
+    sender_lf = LabelFrame(remote_window, text="Sender", width=scaled_size(540), height=scaled_size(60))
+    sender_lf.place(x=scaled_size(10), y=scaled_size(90))
+    Label(sender_lf, text="Send to address:").place(x=scaled_size(10), y=scaled_size(5))
+    fields['host'] = Entry(sender_lf)
+    fields['host'].place(x=scaled_size(150), y=scaled_size(5), width=scaled_size(200))
+    fields['host'].insert(0, str(config_dict.get('remote_host', '')))
+    Label(sender_lf, text="Port:").place(x=scaled_size(370), y=scaled_size(5))
+    fields['sender_port'] = Entry(sender_lf)
+    fields['sender_port'].place(x=scaled_size(420), y=scaled_size(5), width=scaled_size(80))
+    fields['sender_port'].insert(0, str(config_dict.get('remote_port', remote_link.DEFAULT_PORT)))
+
+    receiver_lf = LabelFrame(remote_window, text="Receiver", width=scaled_size(540), height=scaled_size(210))
+    receiver_lf.place(x=scaled_size(10), y=scaled_size(160))
+    Label(receiver_lf, text="Receive address:").place(x=scaled_size(10), y=scaled_size(5))
+    fields['listen_address'] = Entry(receiver_lf)
+    fields['listen_address'].place(x=scaled_size(150), y=scaled_size(5), width=scaled_size(200))
+    fields['listen_address'].insert(0, str(config_dict.get('remote_listen_address', remote_link.DEFAULT_LISTEN_ADDRESS)))
+    Label(receiver_lf, text="Port:").place(x=scaled_size(370), y=scaled_size(5))
+    fields['receiver_port'] = Entry(receiver_lf)
+    fields['receiver_port'].place(x=scaled_size(420), y=scaled_size(5), width=scaled_size(80))
+    fields['receiver_port'].insert(0, str(config_dict.get('remote_port', remote_link.DEFAULT_PORT)))
+    Label(receiver_lf, text="Allowed senders:").place(x=scaled_size(10), y=scaled_size(35))
+    fields['allowlist'] = Entry(receiver_lf)
+    fields['allowlist'].place(x=scaled_size(150), y=scaled_size(35), width=scaled_size(200))
+    fields['allowlist'].insert(0, str(config_dict.get('remote_allowlist', '')))
+    Label(receiver_lf, text="IPs or CIDRs, blank = any").place(x=scaled_size(360), y=scaled_size(35))
+    Label(receiver_lf, text="Viewer app name contains:").place(x=scaled_size(10), y=scaled_size(65))
+    fields['viewer_app'] = Entry(receiver_lf)
+    fields['viewer_app'].place(x=scaled_size(240), y=scaled_size(65), width=scaled_size(110))
+    fields['viewer_app'].insert(0, str(config_dict.get('remote_viewer_app', '')))
+    Label(receiver_lf, text="Viewer window title contains:").place(x=scaled_size(10), y=scaled_size(95))
+    fields['viewer_title'] = Entry(receiver_lf)
+    fields['viewer_title'].place(x=scaled_size(240), y=scaled_size(95), width=scaled_size(110))
+    fields['viewer_title'].insert(0, str(config_dict.get('remote_viewer_title', '')))
+    Label(receiver_lf, text="Viewer ports, same order (blank = Port above):").place(x=scaled_size(10), y=scaled_size(125))
+    fields['viewer_ports'] = Entry(receiver_lf)
+    fields['viewer_ports'].place(x=scaled_size(240), y=scaled_size(125), width=scaled_size(110))
+    fields['viewer_ports'].insert(0, str(config_dict.get('remote_viewer_ports', '')))
+    Label(receiver_lf, text="e.g. mstsc, vncviewer").place(x=scaled_size(360), y=scaled_size(65))
+    Label(receiver_lf, text="Each viewer pairs with the port its sender feeds; its profile applies only while that viewer is active.").place(x=scaled_size(10), y=scaled_size(155))
+
+    secret_label = Label(remote_window, text="Shared secret (optional, same on both ends):")
+    secret_label.place(x=scaled_size(20), y=scaled_size(355))
+    fields['secret'] = Entry(remote_window, show='*')
+    fields['secret'].place(x=scaled_size(380), y=scaled_size(355), width=scaled_size(160))
+    fields['secret'].insert(0, str(config_dict.get('remote_secret', '')))
+
+    save_button = Button(remote_window, text="Save", command=lambda: save_remote_click(remote_window, fields))
+    save_button.place(x=scaled_size(10), y=scaled_size(390), width=scaled_size(540))
+
+    def update_remote_section_visibility(*_args):
+        mode = fields['mode'].get()
+        show_sender = mode == remote_link.REMOTE_MODE_SENDER
+        show_receiver = mode == remote_link.REMOTE_MODE_RECEIVER
+        if show_sender:
+            sender_lf.place(x=scaled_size(10), y=scaled_size(90))
+        else:
+            sender_lf.place_forget()
+        if show_receiver:
+            receiver_lf.place(x=scaled_size(10), y=scaled_size(90))
+        else:
+            receiver_lf.place_forget()
+        # bottom of the last visible section, unscaled: receiver 90+180, sender 90+60, radios 55+20
+        # bottom of the last visible section, unscaled: receiver 90+210, sender 90+60, radios 55+20
+        content_bottom = 300 if show_receiver else 150 if show_sender else 75
+        secret_y = scaled_size(content_bottom + 15)
+        if mode == remote_link.REMOTE_MODE_OFF:
+            # nothing below the radios uses the secret, so hide the whole row
+            secret_label.place_forget()
+            fields['secret'].place_forget()
+            save_y = secret_y
+        else:
+            secret_label.place(x=scaled_size(20), y=secret_y)
+            fields['secret'].place(x=scaled_size(380), y=secret_y, width=scaled_size(160))
+            save_y = secret_y + scaled_size(35)
+        save_button.place(x=scaled_size(10), y=save_y, width=scaled_size(540))
+        height = save_y + scaled_size(50)
+        pos = remote_window.geometry().replace('-', '+-').split('+')
+        if len(pos) >= 3:
+            height = f"{height}+{pos[1]}+{pos[2]}"
+        remote_window.geometry(f"{REMOTE_WINDOW_WIDTH}x{height}")
+
+    # trace added after the variable is created, so fire once for the initial mode
+    fields['mode'].trace_add("write", update_remote_section_visibility)
+    update_remote_section_visibility()
+
 rules_lf = LabelFrame(root, text="Autoswitch rules", width=scaled_size(620), height=scaled_size(410))
 rules_lf.place(x=scaled_size(PADDING), y=scaled_size(215)) 
 
@@ -997,7 +1320,9 @@ dp_fw_update_label.place(x=scaled_size(5), y=scaled_size(30))
 # ------------------
 
 root.update()
-duckypad_connect()
+remote_apply_config()
+if remote_mode() != remote_link.REMOTE_MODE_SENDER:
+    duckypad_connect()
 
 def contains_jump_by_number():
     for item in config_dict['rules_list']:
@@ -1029,6 +1354,8 @@ RTC_SYNC_FREQ_SECONDS = 30
 
 def sync_rtc():
     root.after(RTC_SYNC_FREQ_SECONDS*1000, sync_rtc)
+    if remote_mode() == remote_link.REMOTE_MODE_SENDER:
+        return
     try:
         if THIS_DUCKYPAD.info_dict is not None:
             # NEW: On Linux, open before sync
