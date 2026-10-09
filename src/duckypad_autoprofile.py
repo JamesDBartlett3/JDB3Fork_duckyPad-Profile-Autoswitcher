@@ -557,6 +557,7 @@ remote_button.place(x=scaled_size(310), y=scaled_size(5), width=scaled_size(90))
 # snapshot the native bg: default_button_color is a hardcoded 'grey' off-Windows that
 # reads as a disabled control next to the theme's own button color
 remote_button_default_bg = remote_button.cget('bg')
+remote_button_default_fg = remote_button.cget('fg')
 
 autoswitch_status_var = StringVar()
 autoswitch_status_label = Label(master=dashboard_lf, textvariable=autoswitch_status_var, font='TkFixedFont', cursor="hand2")
@@ -674,13 +675,13 @@ def update_remote_indicator(status_text):
     (SENDING = sender running, RECEIVING = receiver running, ERROR = start failure); single-line
     so the button never grows down into the autoswitch status label."""
     if "ERROR" in status_text:
-        remote_button.config(text="ERROR", bg='orange red')
+        remote_button.config(text="ERROR", bg='orange red', fg=remote_button_default_fg)
     elif "SENDING" in status_text:
-        remote_button.config(text="SENDING", bg='green')
+        remote_button.config(text="SENDING", bg='green', fg='white')
     elif "RECEIVING" in status_text:
-        remote_button.config(text="RECEIVING", bg='green')
+        remote_button.config(text="RECEIVING", bg='green', fg='white')
     else:
-        remote_button.config(text="Remote...", bg=remote_button_default_bg)
+        remote_button.config(text="Remote...", bg=remote_button_default_bg, fg=remote_button_default_fg)
 
 def remote_mode():
     return config_dict.get('remote_mode', remote_link.REMOTE_MODE_OFF)
