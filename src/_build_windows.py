@@ -46,6 +46,7 @@ PyInstaller.__main__.run([
     '--icon=_icon.ico',
     '--noconsole',
     '--add-data=_icon.ico;.',
+    '--hidden-import=PIL._tkinter_finder',
     '--collect-all',
     'certifi'
 ])
@@ -62,6 +63,7 @@ PyInstaller.__main__.run([
     '--icon=_icon.ico',
     '--console',
     '--add-data=_icon.ico;.',
+    '--hidden-import=PIL._tkinter_finder',
     '--collect-all',
     'certifi',
     '--name=duckypad_autoprofile_debug'

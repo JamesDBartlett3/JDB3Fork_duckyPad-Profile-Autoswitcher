@@ -47,6 +47,7 @@ PyInstaller.__main__.run([
     '--onefile',
     '--noconsole',
     '--add-data=_icon.ico:.',
+    '--hidden-import=PIL._tkinter_finder',
     f"--name={exe_file_name}"
 ])
 

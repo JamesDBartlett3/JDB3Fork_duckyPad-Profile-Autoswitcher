@@ -19,7 +19,7 @@ from platformdirs import *
 import subprocess
 import argparse
 import pystray
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageTk
 if sys.platform == 'win32':
     import winreg
 
@@ -407,24 +407,21 @@ def next_prof_click():
     threading.Thread(target=_prof_click_worker, args=(HID_COMMAND_NEXT_PROFILE,), daemon=True).start()
 
 # System tray functionality
+def icon_base_path():
+    """Where data files live: the script dir, or _MEIPASS in a PyInstaller bundle"""
+    if getattr(sys, 'frozen', False):
+        return sys._MEIPASS
+    return os.path.dirname(__file__)
+
 def create_tray_image():
     """Create a simple icon for the system tray"""
     try:
-        # Get the base path - works for both development and PyInstaller bundle
-        if getattr(sys, 'frozen', False):
-            # Running as compiled executable
-            base_path = sys._MEIPASS
-        else:
-            # Running as script
-            base_path = os.path.dirname(__file__)
-        
-        # Try to load the application icon
-        icon_path = os.path.join(base_path, '_icon.ico')
+        icon_path = os.path.join(icon_base_path(), '_icon.ico')
         if os.path.exists(icon_path):
             return Image.open(icon_path)
     except Exception as e:
         print(f"Could not load icon file: {e}")
-    
+
     # Fallback: create a simple programmatic icon
     width = 64
     height = 64
@@ -435,6 +432,17 @@ def create_tray_image():
         fill='white'
     )
     return image
+
+def set_window_icon():
+    """Give the window/taskbar the app icon (Tk shows a generic default without it)"""
+    try:
+        icon_path = os.path.join(icon_base_path(), '_icon.ico')
+        if os.path.exists(icon_path):
+            photo = ImageTk.PhotoImage(Image.open(icon_path))
+            root._window_icon_ref = photo  # Tk keeps no reference; PhotoImage must stay alive
+            root.iconphoto(True, photo)
+    except Exception as e:
+        print(f"Could not set window icon: {e}")
 
 def show_window():
     """Show the main window and bring it to front"""
@@ -477,6 +485,7 @@ def run_tray_icon():
 
 root = Tk()
 root.title("duckyPad autoswitcher " + THIS_VERSION_NUMBER)
+set_window_icon()
 root.geometry(f"{MAIN_WINDOW_WIDTH}x{MAIN_WINDOW_HEIGHT}")
 root.resizable(width=FALSE, height=FALSE)
 root.protocol("WM_DELETE_WINDOW", on_closing)
