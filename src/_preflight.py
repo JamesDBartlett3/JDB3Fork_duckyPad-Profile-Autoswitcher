@@ -6,6 +6,7 @@ before PyInstaller is imported, lists every missing package, and prints a single
 command that installs them all.
 """
 import importlib
+import os
 import sys
 
 # import name -> pip package name (None = comes with Python or the system)
@@ -65,7 +66,13 @@ def run_preflight():
             print(f'  {module:<12} (system package, see below)')
 
     print('\nInstall them all at once:')
-    print(f'  pip install {" ".join(pip_names)}')
+    # requirements.txt is the source of truth (pins, platform markers); the
+    # absolute path keeps the command valid from any working directory.
+    req_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'requirements.txt')
+    if os.path.isfile(req_path):
+        print(f'  pip install -r "{req_path}" pyinstaller')
+    else:
+        print(f'  pip install {" ".join(pip_names)}')
 
     if 'tkinter' in missing:
         print('\ntkinter is not a pip package; install it for your system:')
